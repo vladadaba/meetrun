@@ -1,0 +1,26 @@
+{
+  "name": "meetrun",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Running community meetup platform - MeetRun.fun",
+  "scripts": {
+    "dev": "pnpm run dev:core & pnpm run dev:web & pnpm run dev:admin",
+    "dev:web": "pnpm --filter @meetrun/web dev",
+    "dev:admin": "pnpm --filter @meetrun/admin dev",
+    "dev:core": "pnpm --filter @meetrun/core start:dev",
+    "build": "pnpm run -r build",
+    "build:web": "pnpm --filter @meetrun/web build",
+    "build:admin": "pnpm --filter @meetrun/admin build",
+    "build:core": "pnpm --filter @meetrun/core build",
+    "lint": "pnpm run -r lint",
+    "test": "pnpm run -r test",
+    "db:migrate": "pnpm --filter @meetrun/core exec prisma migrate dev",
+    "db:generate": "pnpm --filter @meetrun/core exec prisma generate",
+    "db:seed": "pnpm --filter @meetrun/core exec prisma db seed"
+  },
+  "packageManager": "pnpm@10.32.1",
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=10"
+  }
+}

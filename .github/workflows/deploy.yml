@@ -1,0 +1,190 @@
+name: Deploy to Coolify
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-to-prod
+  cancel-in-progress: true
+
+jobs:
+  detect-changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      web: ${{ steps.changes.outputs.web || steps.all.outputs.web }}
+      admin: ${{ steps.changes.outputs.admin || steps.all.outputs.admin }}
+      core: ${{ steps.changes.outputs.core || steps.all.outputs.core }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect changes
+        uses: dorny/paths-filter@v3
+        id: changes
+        # On workflow_dispatch there's no event.before, so default to deploying everything
+        if: github.event_name == 'push'
+        with:
+          base: ${{ github.event.before }}
+          ref: ${{ github.sha }}
+          filters: |
+            web:
+              - 'apps/web/**'
+              - 'pnpm-lock.yaml'
+            admin:
+              - 'apps/admin/**'
+              - 'pnpm-lock.yaml'
+            core:
+              - 'services/core/**'
+              - 'pnpm-lock.yaml'
+
+      # On manual dispatch, deploy everything
+      - name: Deploy all on manual dispatch
+        if: github.event_name == 'workflow_dispatch'
+        id: all
+        run: |
+          echo "web=true" >> $GITHUB_OUTPUT
+          echo "admin=true" >> $GITHUB_OUTPUT
+          echo "core=true" >> $GITHUB_OUTPUT
+
+  build-web:
+    name: Build Web
+    needs: detect-changes
+    if: needs.detect-changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to Docker Hub
+        run: echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            --push \
+            --cache-from type=gha \
+            --cache-to type=gha,mode=max \
+            --build-arg NEXT_PUBLIC_API_URL="https://api.meetrun.fun" \
+            -t "${{ secrets.DOCKERHUB_USERNAME }}/meetrun:web-prod" \
+            -f apps/web/Dockerfile \
+            .
+
+  build-admin:
+    name: Build Admin
+    needs: detect-changes
+    if: needs.detect-changes.outputs.admin == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to Docker Hub
+        run: echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            --push \
+            --cache-from type=gha \
+            --cache-to type=gha,mode=max \
+            --build-arg VITE_API_URL="https://api.meetrun.fun" \
+            -t "${{ secrets.DOCKERHUB_USERNAME }}/meetrun:admin-prod" \
+            -f apps/admin/Dockerfile \
+            .
+
+  build-core:
+    name: Build Core
+    needs: detect-changes
+    if: needs.detect-changes.outputs.core == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to Docker Hub
+        run: echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        run: |
+          docker buildx build \
+            --platform linux/amd64 \
+            --push \
+            --cache-from type=gha \
+            --cache-to type=gha,mode=max \
+            -t "${{ secrets.DOCKERHUB_USERNAME }}/meetrun:core-prod" \
+            -f services/core/Dockerfile \
+            .
+
+  migrate-database:
+    name: Migrate Database
+    needs: build-core
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --filter @meetrun/core
+
+      - name: Port forward and run migrations
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ secrets.PROD_HOST_IP }} >> ~/.ssh/known_hosts
+          echo "${{ secrets.COOLIFY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh -fN -i ~/.ssh/deploy_key \
+            -L 5432:localhost:5432 \
+            root@${{ secrets.PROD_HOST_IP }}
+
+          export DATABASE_URL="postgresql://${{ secrets.DB_USER_PROD }}:${{ secrets.DB_PASSWORD_PROD }}@localhost:5432/postgres?schema=meetrun"
+          pnpm --filter @meetrun/core exec prisma migrate deploy
+
+          rm -f ~/.ssh/deploy_key
+
+  deploy-web:
+    name: Deploy Web
+    needs: build-web
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Coolify deployment
+        run: |
+          curl --request GET \
+            "${{ secrets.COOLIFY_WEBHOOK_WEB_PROD }}" \
+            --header "Authorization: Bearer ${{ secrets.COOLIFY_DEPLOY_TOKEN_PROD }}"
+
+  deploy-admin:
+    name: Deploy Admin
+    needs: build-admin
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Coolify deployment
+        run: |
+          curl --request GET \
+            "${{ secrets.COOLIFY_WEBHOOK_ADMIN_PROD }}" \
+            --header "Authorization: Bearer ${{ secrets.COOLIFY_DEPLOY_TOKEN_PROD }}"
+
+  deploy-core:
+    name: Deploy Core
+    needs: migrate-database
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Coolify deployment
+        run: |
+          curl --request GET \
+            "${{ secrets.COOLIFY_WEBHOOK_CORE_PROD }}" \
+            --header "Authorization: Bearer ${{ secrets.COOLIFY_DEPLOY_TOKEN_PROD }}"

@@ -1,0 +1,70 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum AdminRole {
+  SUPERADMIN
+  ADMIN
+}
+
+model Admin {
+  id             String    @id @default(uuid())
+  email          String    @unique
+  name           String
+  hashedPassword String
+  role           AdminRole @default(ADMIN)
+  mustChangePassword Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("admins")
+}
+
+enum MeetupStatus {
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+}
+
+enum MeetupCategory {
+  FIVE_K
+  TEN_K
+  HALF_MARATHON
+  MARATHON
+  TRAIL
+  SOCIAL
+  TRAINING
+}
+
+model Meetup {
+  id          String         @id @default(uuid())
+  title       String
+  description String
+  date        DateTime
+  location    String
+  category    MeetupCategory
+  status      MeetupStatus   @default(PENDING_REVIEW)
+
+  // Submitter info (no login required)
+  submitterName  String
+  submitterEmail String
+
+  // Admin review
+  reviewedBy   String?
+  reviewedAt   DateTime?
+  reviewNote   String?
+
+  maxParticipants Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("meetups")
+}
